@@ -5,6 +5,7 @@ import {
   classifySensitivePath,
   inspectRepoContext,
   runGit,
+  sanitizeGitError,
 } from './git.mjs';
 
 const TEST_FILE_REGEX = /(^|\/)(tests?|__tests__)\/|(\.test|\.spec)\.[cm]?[jt]sx?$/i;
@@ -31,7 +32,14 @@ export function resolveBaseRef(repoRoot, explicitBase) {
 
 function inspectTestDiff(repoRoot, baseRef, filePath) {
   const diffRes = runGit(repoRoot, ['diff', '-U0', `${baseRef}...HEAD`, '--', filePath]);
-  if (diffRes.status !== 0) return null;
+  if (diffRes.status !== 0) {
+    return {
+      path: filePath,
+      diffFailed: true,
+      exitCode: diffRes.status,
+      detail: sanitizeGitError(diffRes.stderr || diffRes.stdout),
+    };
+  }
 
   let removedAssertions = 0;
   let addedAssertions = 0;
@@ -131,21 +139,55 @@ export function runPrReady(dir, options = {}) {
     );
   }
 
-  // 3. Ahead / behind & diff stats
+  // 3. Ahead / behind, merge-base & diff stats (fail closed on any Git subprocess error)
   const aheadRes = runGit(ctx.repoRoot, ['rev-list', '--count', `${baseRef}..HEAD`]);
   const behindRes = runGit(ctx.repoRoot, ['rev-list', '--count', `HEAD..${baseRef}`]);
+  if (aheadRes.status !== 0) {
+    const detail = sanitizeGitError(aheadRes.stderr || aheadRes.stdout);
+    errors.push(
+      `Failed to count commits ahead for "${baseRef}..HEAD" (git rev-list exited ${aheadRes.status}${detail ? `: ${detail}` : ''}).`
+    );
+  }
+  if (behindRes.status !== 0) {
+    const detail = sanitizeGitError(behindRes.stderr || behindRes.stdout);
+    errors.push(
+      `Failed to count commits behind for "HEAD..${baseRef}" (git rev-list exited ${behindRes.status}${detail ? `: ${detail}` : ''}).`
+    );
+  }
   const commitsAhead = aheadRes.status === 0 ? Number.parseInt(aheadRes.stdout.trim(), 10) || 0 : 0;
   const commitsBehind = behindRes.status === 0 ? Number.parseInt(behindRes.stdout.trim(), 10) || 0 : 0;
 
-  if (commitsAhead === 0) {
+  if (aheadRes.status === 0 && commitsAhead === 0) {
     errors.push(`Branch "${ctx.branch || 'HEAD'}" has 0 commits ahead of "${baseRef}".`);
   }
-  if (commitsBehind > 0) {
+  if (behindRes.status === 0 && commitsBehind > 0) {
     warnings.push(`Branch is ${commitsBehind} commit(s) behind "${baseRef}".`);
   }
 
+  const mergeBaseRes = runGit(ctx.repoRoot, ['merge-base', baseRef, 'HEAD']);
+  const mergeBase = mergeBaseRes.status === 0 ? mergeBaseRes.stdout.trim() : null;
+  if (mergeBaseRes.status !== 0 || !mergeBase) {
+    const detail = sanitizeGitError(mergeBaseRes.stderr || mergeBaseRes.stdout);
+    errors.push(
+      `Cannot compute merge base between "${baseRef}" and HEAD (branches have unrelated histories or missing shallow commits; git merge-base exited ${mergeBaseRes.status}${detail ? `: ${detail}` : ''}).`
+    );
+  }
+
   const nameStatusRes = runGit(ctx.repoRoot, ['diff', '--name-status', `${baseRef}...HEAD`]);
+  if (nameStatusRes.status !== 0) {
+    const detail = sanitizeGitError(nameStatusRes.stderr || nameStatusRes.stdout);
+    errors.push(
+      `Failed to compute changed file statuses ("git diff --name-status ${baseRef}...HEAD" exited ${nameStatusRes.status}${detail ? `: ${detail}` : ''}).`
+    );
+  }
+
   const numstatRes = runGit(ctx.repoRoot, ['diff', '--numstat', `${baseRef}...HEAD`]);
+  if (numstatRes.status !== 0) {
+    const detail = sanitizeGitError(numstatRes.stderr || numstatRes.stdout);
+    errors.push(
+      `Failed to compute diff line stats ("git diff --numstat ${baseRef}...HEAD" exited ${numstatRes.status}${detail ? `: ${detail}` : ''}).`
+    );
+  }
 
   const numstatMap = new Map();
   let totalInsertions = 0;
@@ -209,7 +251,11 @@ export function runPrReady(dir, options = {}) {
         warnings.push(`Test file deleted in PR diff: "${file.path}". Verify test coverage was not silently removed.`);
       } else {
         const finding = inspectTestDiff(ctx.repoRoot, baseRef, file.path);
-        if (finding) {
+        if (finding && finding.diffFailed) {
+          errors.push(
+            `Failed to inspect test diff for "${file.path}" ("git diff -U0 ${baseRef}...HEAD -- ${file.path}" exited ${finding.exitCode}${finding.detail ? `: ${finding.detail}` : ''}).`
+          );
+        } else if (finding) {
           testIntegrityFindings.push(finding);
           const detailParts = [];
           if (finding.removedAssertions > finding.addedAssertions) {
@@ -229,7 +275,12 @@ export function runPrReady(dir, options = {}) {
 
   // 6. Conflict markers in diff
   const fullDiffRes = runGit(ctx.repoRoot, ['diff', `${baseRef}...HEAD`]);
-  if (fullDiffRes.status === 0) {
+  if (fullDiffRes.status !== 0) {
+    const detail = sanitizeGitError(fullDiffRes.stderr || fullDiffRes.stdout);
+    errors.push(
+      `Failed to scan diff for conflict markers ("git diff ${baseRef}...HEAD" exited ${fullDiffRes.status}${detail ? `: ${detail}` : ''}).`
+    );
+  } else {
     const markerLines = fullDiffRes.stdout
       .split('\n')
       .filter((line) => /^\+(<{7} |={7}$|>{7} )/.test(line));
@@ -266,6 +317,7 @@ export function runPrReady(dir, options = {}) {
     branch: ctx.branch,
     headSha: ctx.headSha,
     baseRef,
+    mergeBase,
     commitsAhead,
     commitsBehind,
     diff: {

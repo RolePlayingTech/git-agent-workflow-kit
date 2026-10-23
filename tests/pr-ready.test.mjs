@@ -2,9 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { runPrReady } from '../src/pr-ready.mjs';
+import { sanitizeGitError } from '../src/git.mjs';
 
 function git(cwd, args) {
   const res = spawnSync('git', args, {
@@ -105,5 +106,98 @@ test('pr-ready detects weakened test assertions and governance file modification
     assert.ok(report.warnings.some((w) => w.includes('AGENTS.md')));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pr-ready fails closed on unrelated root histories (--orphan) and never reports a false-positive PASS', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'git-agent-unrelated-'));
+  const cliBin = resolve(import.meta.dirname, '../bin/git-agent.mjs');
+  try {
+    git(dir, ['init', '-b', 'main']);
+    git(dir, ['config', 'commit.gpgsign', 'false']);
+    git(dir, ['commit', '--allow-empty', '-m', 'base']);
+
+    git(dir, ['switch', '--orphan', 'feature']);
+    writeFileSync(join(dir, 'unrelated.txt'), 'new file\n', 'utf8');
+    git(dir, ['add', 'unrelated.txt']);
+    git(dir, ['commit', '-m', 'feature on orphan root']);
+
+    const report = runPrReady(dir, { base: 'main', strict: true });
+    assert.strictEqual(report.ok, false);
+    assert.strictEqual(report.status, 'FAIL');
+    assert.strictEqual(report.mergeBase, null);
+    assert.ok(report.errors.some((e) => e.includes('Cannot compute merge base between "main" and HEAD')));
+    assert.ok(report.errors.some((e) => e.includes('Failed to compute changed file statuses')));
+    assert.ok(report.errors.some((e) => e.includes('Failed to compute diff line stats')));
+    assert.ok(report.errors.some((e) => e.includes('Failed to scan diff for conflict markers')));
+
+    // Verify CLI binary exits 1 and prints FAIL
+    const cliRes = spawnSync(process.execPath, [cliBin, 'pr-ready', dir, '--base', 'main', '--strict'], {
+      encoding: 'utf8',
+    });
+    assert.strictEqual(cliRes.status, 1);
+    assert.match(cliRes.stdout, /^Git Agent PR Readiness: FAIL/m);
+    assert.match(cliRes.stdout, /Cannot compute merge base between "main" and HEAD/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('pr-ready fails closed on missing base ref, shallow clones without merge base, and staged uncommitted changes', () => {
+  const root = mkdtempSync(join(tmpdir(), 'git-agent-shallow-'));
+  try {
+    const originDir = join(root, 'origin.git');
+    const setupDir = join(root, 'setup');
+    const shallowDir = join(root, 'shallow');
+
+    git(root, ['init', '--bare', '--initial-branch=main', originDir]);
+    git(root, ['clone', originDir, setupDir]);
+    git(setupDir, ['config', 'commit.gpgsign', 'false']);
+
+    writeFileSync(join(setupDir, 'file.txt'), 'v1\n', 'utf8');
+    git(setupDir, ['add', 'file.txt']);
+    git(setupDir, ['commit', '-m', 'c1']);
+    writeFileSync(join(setupDir, 'file.txt'), 'v2\n', 'utf8');
+    git(setupDir, ['commit', '-am', 'c2']);
+    writeFileSync(join(setupDir, 'file.txt'), 'v3\n', 'utf8');
+    git(setupDir, ['commit', '-am', 'c3']);
+    git(setupDir, ['push', '-u', 'origin', 'main']);
+
+    git(setupDir, ['switch', '-c', 'feat/diverged', 'HEAD~2']);
+    writeFileSync(join(setupDir, 'feat.txt'), 'feature\n', 'utf8');
+    git(setupDir, ['add', 'feat.txt']);
+    git(setupDir, ['commit', '-m', 'f1']);
+    writeFileSync(join(setupDir, 'feat.txt'), 'feature2\n', 'utf8');
+    git(setupDir, ['commit', '-am', 'f2']);
+    git(setupDir, ['push', '-u', 'origin', 'feat/diverged']);
+
+    // 1. Invalid base ref throws clear error
+    assert.throws(() => runPrReady(setupDir, { base: 'nonexistent-base-ref' }), /could not be resolved/);
+
+    // 2. Staged uncommitted changes fail closed before commit
+    writeFileSync(join(setupDir, 'feat.txt'), 'staged-but-uncommitted\n', 'utf8');
+    git(setupDir, ['add', 'feat.txt']);
+    const stagedReport = runPrReady(setupDir, { base: 'main' });
+    assert.strictEqual(stagedReport.ok, false);
+    assert.ok(stagedReport.errors.some((e) => e.includes('Working tree has uncommitted changes (staged: 1, unstaged: 0)')));
+
+    // 3. Shallow clone with depth=1 where main and feat/diverged have no merge base in shallow graph
+    const fileUrl = `file://${originDir.replace(/\\/g, '/')}`;
+    git(root, ['clone', '--depth', '1', '--branch', 'feat/diverged', fileUrl, shallowDir]);
+    git(shallowDir, ['remote', 'set-branches', 'origin', 'main', 'feat/diverged']);
+    git(shallowDir, ['fetch', '--depth', '1', 'origin', 'main']);
+
+    const shallowReport = runPrReady(shallowDir, { base: 'origin/main', strict: true });
+    assert.strictEqual(shallowReport.ok, false);
+    assert.strictEqual(shallowReport.status, 'FAIL');
+    assert.ok(shallowReport.errors.some((e) => e.includes('Cannot compute merge base between "origin/main" and HEAD')));
+
+    // 4. Verify credential sanitization helper strips tokens from error strings
+    assert.strictEqual(
+      sanitizeGitError('fatal: unable to access https://user:ghp_secretToken12345@github.com/org/repo.git/'),
+      'fatal: unable to access https://***:***@github.com/org/repo.git/'
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });

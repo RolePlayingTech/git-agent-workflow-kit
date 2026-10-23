@@ -69,6 +69,7 @@ Options: `--base <ref>`, `--allow <glob>` (repeatable or comma-separated), `--ma
 Audits whether a branch is ready for a Pull Request:
 
 - **Branch & working-tree gate**: Fails if run on `main`/`master`, in `detached HEAD`, with 0 commits ahead of base, or with uncommitted staged/unstaged changes.
+- **Fail-closed merge-base & diff verification**: Checks the exit status of `git merge-base <base> HEAD`, `git diff --name-status <base>...HEAD`, `git diff --numstat <base>...HEAD`, per-file test diffs, and conflict-marker diffs. If `<base>` and `HEAD` have unrelated histories (`--orphan`) or a missing shallow merge base, `pr-ready` fails closed (`exit 1`) with an explicit error rather than treating a failed diff as zero changed files.
 - **Task scope enforcement (`--allow`)**: Compares every file changed in `base...HEAD` against your allowed globs and fails on any out-of-scope file modifications (*scope creep*).
 - **Test-integrity detector**: Inspects modified test files (`tests/**`, `*.test.*`, `*.spec.*`) in `base...HEAD`. Warns (and fails under `--strict`) if a test file removes assertions (`expect(...)`, `assert.*`), adds `.skip` / `.todo`, or replaces strict checks (`toBe`, `strictEqual`) with weak tautologies (`toBeDefined()`, `assert.ok(res.status)`).
 - **High-attention & secret file checks**: Fails if any secret file is in the diff; warns when CI workflows (`.github/workflows/**`), database migrations (`migrations/**`, `schema.prisma`), dependency lockfiles, or governance files (`AGENTS.md`, `CLAUDE.md`, `CODEOWNERS`) are modified.
@@ -140,7 +141,8 @@ Warnings (review carefully):
 See **[SECURITY.md](SECURITY.md)** for full details.
 
 - **Diagnostics never mutate your repository**: `doctor`, `pr-ready`, and `recovery-plan` are strictly read-only (`GIT_TERMINAL_PROMPT=0`, `GIT_OPTIONAL_LOCKS=0`).
-- **Heuristic test & secret detection**: `pr-ready` uses static diff heuristics to flag removed assertions, tautological checks (`toBeDefined()`, `assert.ok(res.status)`), and sensitive filenames (`.env*`, `*.pem`, `*.key`, `id_rsa`). It is a fast review aid, not a substitute for reading the diff, running a full secret scanner (such as GitHub Secret Scanning / Gitleaks), or executing independent integration tests.
+- **Fail-closed diff verification & what `pr-ready` does/does not guarantee**: `pr-ready` guarantees that your working tree has no uncommitted tracked edits, your branch is not a protected base branch, `<base>` and `HEAD` share a valid merge base with at least 1 commit ahead, every changed file matches `--allow` globs (when provided), and no `<<<<<<<` conflict markers appear in the diff. It **does not** execute your test suite or typechecker, prove runtime correctness, or replace full secret scanners (such as GitHub Secret Scanning / Gitleaks) and human semantic review. Always run your project's verification commands (`npm run check`, `npm test`) before and after committing.
+- **Heuristic test & secret detection**: `pr-ready` uses static diff heuristics to flag removed assertions, tautological checks (`toBeDefined()`, `assert.ok(res.status)`), and sensitive filenames (`.env*`, `*.pem`, `*.key`, `id_rsa`). It is a fast review aid, not a substitute for reading the diff.
 - **Local checks vs. GitHub branch protection**: `git-agent` runs locally or in CI. To prevent an agent with push credentials from pushing directly to `main`, enforce **Branch Protection / Rulesets**, **Required Status Checks**, and **Required Reviews** in your GitHub repository settings.
 
 ---

@@ -35,6 +35,16 @@ export function runGit(cwd, args, options = {}) {
   };
 }
 
+export function sanitizeGitError(rawText) {
+  if (!rawText) return '';
+  return String(rawText)
+    .replace(/https?:\/\/[^/\s:@]+:[^/\s@]+@/gi, 'https://***:***@')
+    .replace(/\b(gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|glpat-[A-Za-z0-9_-]+)\b/g, '***')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
 export function classifySensitivePath(relPath) {
   const normalized = relPath.replace(/\\/g, '/').replace(/^\.\//, '');
   const base = basename(normalized);

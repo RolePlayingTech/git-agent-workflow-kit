@@ -28,6 +28,13 @@ test('all 5 built-in skills validate against Agent Skills naming and match canon
     assert.strictEqual(check.valid, true);
     assert.strictEqual(check.digest, item.sha256);
   }
+
+  // Regression check (#2): github-issue-to-pr must instruct committing before running post-commit pr-ready
+  const issueToPrDisk = readFileSync(join(repoRoot, 'skills/github-issue-to-pr/SKILL.md'), 'utf8');
+  const commitIdx = issueToPrDisk.indexOf('git commit -m');
+  const prReadyIdx = issueToPrDisk.indexOf('git-agent-workflow-kit pr-ready');
+  assert.ok(commitIdx > 0 && prReadyIdx > commitIdx, 'github-issue-to-pr skill must commit before running pr-ready');
+  assert.match(issueToPrDisk, /git diff --cached/);
 });
 
 test('skills install tracks create, unchanged, and conflict states and refuses to overwrite hand-edited skills without --force', () => {

@@ -130,8 +130,9 @@ test('accepts session with userId', () => {
       branches: ['main'],
       instructions: [
         `cd "${workspaceDir}"`,
-        'npx git-agent doctor .',
+        'npx github:RolePlayingTech/git-agent-workflow-kit doctor .',
         'git switch -c feat/session-expiry',
+        'npx github:RolePlayingTech/git-agent-workflow-kit pr-ready . --base main --allow "src/auth.js" --allow "tests/auth.test.js" --allow ".gitignore"',
       ],
     };
   }
@@ -308,7 +309,8 @@ test('allows admin role with HTTP 200', () => {
     instructions: [
       `cd "${workspaceDir}"`,
       'git branch -a',
-      'npx git-agent pr-ready . --base main --allow "tests/**" (after switching to agent-3/fix-tests)',
+      'git switch agent-3/fix-tests',
+      'npx github:RolePlayingTech/git-agent-workflow-kit pr-ready . --base main --allow "tests/**" --strict',
     ],
   };
 }

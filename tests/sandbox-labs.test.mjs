@@ -31,17 +31,56 @@ test('Lab A sandbox: full walkthrough from doctor failure to scoped PR readiness
     const sb = createSandbox('lab-a', target);
     const ws = sb.workspaceDir;
 
+    // Verify sandbox instructions use unambiguous package specifier (#2)
+    assert.ok(
+      sb.instructions.some((line) => line.includes('npx github:RolePlayingTech/git-agent-workflow-kit doctor .')),
+      'Lab A instructions must use unambiguous npx github:RolePlayingTech/git-agent-workflow-kit specifier'
+    );
+    assert.ok(
+      !sb.instructions.some((line) => line.includes('npx git-agent ')),
+      'Lab A instructions must not use ambiguous npx git-agent'
+    );
+
     // Step 1: Doctor catches main branch + unignored .env.local
     const doc1 = runDoctor(ws);
     assert.strictEqual(doc1.ok, false);
     assert.strictEqual(doc1.repository.branch, 'main');
     assert.ok(doc1.errors.some((e) => e.includes('.env.local')));
 
-    // Step 2: Switch to feature branch and fix .gitignore
+    // Step 2: Switch to feature branch, fix .gitignore, and add failing-first session expiry test
     assert.strictEqual(git(ws, ['switch', '-c', 'feat/session-expiry']).status, 0);
     writeFileSync(join(ws, '.gitignore'), 'node_modules/\ndist/\n.env\n.env.*\n!.env.example\n', 'utf8');
+    writeFileSync(
+      join(ws, 'tests/auth.test.js'),
+      `import test from 'node:test';
+import assert from 'node:assert/strict';
+import { verifySession } from '../src/auth.js';
 
-    // Step 3: Implement session expiry in src/auth.js + tests/auth.test.js, plus accidental edit to src/dashboard.js
+test('accepts session with userId', () => {
+  const res = verifySession({ userId: 'usr_01', expiresAt: 2000, now: 1000 });
+  assert.strictEqual(res.valid, true);
+});
+
+test('rejects expired session', () => {
+  const res = verifySession({ userId: 'usr_01', expiresAt: 1000, now: 1500 });
+  assert.strictEqual(res.valid, false);
+  assert.strictEqual(res.reason, 'expired');
+});
+`,
+      'utf8'
+    );
+
+    // Verify new expiry test fails before src/auth.js is updated
+    const childEnv = { ...process.env };
+    delete childEnv.NODE_TEST_CONTEXT;
+    const testBeforeFix = spawnSync(process.execPath, ['--test', 'tests/auth.test.js'], {
+      cwd: ws,
+      encoding: 'utf8',
+      env: childEnv,
+    });
+    assert.notStrictEqual(testBeforeFix.status, 0, 'Expiry test must fail before src/auth.js checks expiresAt');
+
+    // Step 3: Implement session expiry in src/auth.js, plus accidental edit to src/dashboard.js
     writeFileSync(
       join(ws, 'src/auth.js'),
       `export function verifySession(session) {
@@ -58,7 +97,14 @@ test('Lab A sandbox: full walkthrough from doctor failure to scoped PR readiness
     );
     writeFileSync(join(ws, 'src/dashboard.js'), '// Accidental out-of-scope agent edit\n', 'utf8');
 
-    git(ws, ['add', '.gitignore', 'src/auth.js', 'src/dashboard.js']);
+    const testAfterFix = spawnSync(process.execPath, ['--test', 'tests/auth.test.js'], {
+      cwd: ws,
+      encoding: 'utf8',
+      env: childEnv,
+    });
+    assert.strictEqual(testAfterFix.status, 0, 'Expiry test must pass after src/auth.js checks expiresAt');
+
+    git(ws, ['add', '.gitignore', 'src/auth.js', 'src/dashboard.js', 'tests/auth.test.js']);
     git(ws, ['commit', '-m', 'feat: check session expiry (plus accidental dashboard edit)']);
 
     // Step 4: pr-ready catches out-of-scope src/dashboard.js
@@ -96,6 +142,15 @@ test('Lab B sandbox: three parallel agents, merge conflict resolution, weakened 
     const target = join(root, 'lab-b');
     const sb = createSandbox('lab-b', target);
     const ws = sb.workspaceDir;
+
+    assert.ok(
+      sb.instructions.some((line) => line.includes('npx github:RolePlayingTech/git-agent-workflow-kit pr-ready')),
+      'Lab B instructions must use unambiguous npx github:RolePlayingTech/git-agent-workflow-kit specifier'
+    );
+    assert.ok(
+      !sb.instructions.some((line) => line.includes('npx git-agent ')),
+      'Lab B instructions must not use ambiguous npx git-agent'
+    );
 
     // 1. Merge Agent 1 cleanly into main
     assert.strictEqual(git(ws, ['merge', 'agent-1/auth-audit']).status, 0);
