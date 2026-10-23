@@ -1,0 +1,42 @@
+{
+  "name": "git-agent-workflow-kit",
+  "version": "1.0.0",
+  "description": "Read-only Git & PR diagnostics, non-destructive recovery plans, multi-agent worktree sandboxes, and portable Agent Skills for AI coding workflows.",
+  "type": "module",
+  "bin": {
+    "git-agent": "./bin/git-agent.mjs"
+  },
+  "files": [
+    "bin",
+    "src",
+    "skills",
+    "examples",
+    "SECURITY.md"
+  ],
+  "scripts": {
+    "test": "node --test tests/doctor.test.mjs tests/pr-ready.test.mjs tests/recovery-plan.test.mjs tests/skills.test.mjs tests/sandbox-labs.test.mjs tests/cli.test.mjs",
+    "doctor": "node bin/git-agent.mjs doctor .",
+    "skills:list": "node bin/git-agent.mjs skills list"
+  },
+  "keywords": [
+    "git",
+    "github",
+    "ai-agent",
+    "coding-agents",
+    "git-worktree",
+    "pull-request",
+    "code-review",
+    "agent-skills",
+    "recovery"
+  ],
+  "author": "RolePlayingTech (MUMRO Academy, https://academy.mumro.io)",
+  "license": "MIT",
+  "homepage": "https://github.com/RolePlayingTech/git-agent-workflow-kit#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RolePlayingTech/git-agent-workflow-kit.git"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

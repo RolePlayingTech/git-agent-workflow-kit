@@ -1,0 +1,21 @@
+{
+  "issue": "#42: Add session expiry validation to verifySession()",
+  "baseBranch": "origin/main",
+  "taskBranch": "feat/42-session-expiry",
+  "allowedPaths": [
+    "src/auth.js",
+    "tests/auth.test.js",
+    ".gitignore"
+  ],
+  "forbiddenActions": [
+    "git push origin main",
+    "git reset --hard",
+    "git push --force",
+    "weakening existing test assertions"
+  ],
+  "verificationCommands": [
+    "node bin/git-agent.mjs doctor .",
+    "node bin/git-agent.mjs pr-ready . --base main --allow \"src/auth.js\" --allow \"tests/auth.test.js\" --allow \".gitignore\" --strict",
+    "npm test"
+  ]
+}
